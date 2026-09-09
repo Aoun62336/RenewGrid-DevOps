@@ -1,4 +1,4 @@
-# RenewGrid: AI-Powered E-Waste Recycling & Rewards Platform
+# RenewGrid: AI-Powered E-Waste Recycling and Rewards Platform
 
 <!-- Application Stack -->
 [![FastAPI](https://img.shields.io/badge/FastAPI-005571?style=for-the-badge&logo=fastapi)](https://fastapi.tiangolo.com/)
@@ -11,21 +11,21 @@
 [![TailwindCSS](https://img.shields.io/badge/TailwindCSS-38BDF8?style=for-the-badge&logo=tailwindcss&logoColor=white)](https://tailwindcss.com/)
 [![Leaflet](https://img.shields.io/badge/Leaflet-199900?style=for-the-badge&logo=leaflet&logoColor=white)](https://leafletjs.com/)
 
-<!-- Data & Auth -->
+<!-- Data and Auth -->
 [![SQLAlchemy](https://img.shields.io/badge/SQLAlchemy-D71F00?style=for-the-badge&logo=python&logoColor=white)](https://www.sqlalchemy.org/)
 [![JWT](https://img.shields.io/badge/JWT-000000?style=for-the-badge&logo=jsonwebtokens&logoColor=white)](https://jwt.io/)
 
 ---
 
-RenewGrid is a full-stack e-waste lifecycle management platform that connects consumers, pickup collectors, and recycling facilities under a single system. Users submit e-waste, collectors coordinate pickups with QR-based verification, and recyclers process and close the loop — with AI-estimated pricing and a reward points system tracking environmental impact at every step.
+RenewGrid is a full-stack e-waste lifecycle management platform. Users submit e-waste items, collectors coordinate pickups with QR-based verification, and recyclers process delivered batches. The platform runs an AI price estimator on every submission, tracks CO2 saved, and rewards producers automatically when a pickup completes.
 
-**Admin** creates and manages all users across roles, assigns pickups to collectors and recyclers, monitors platform-wide analytics, configures AI pricing rules per waste category, and has unrestricted access to all data, reports, and reward point assignments.
+**Admin** manages all accounts across every role, assigns pickups to collectors and recyclers, monitors platform-wide analytics, configures the AI pricing rules per waste category, and can generate PDF reports and assign reward points manually.
 
-**User (E-Waste Producer)** uploads e-waste items with photos and metadata, receives an AI-estimated valuation and credit point estimate, schedules a pickup at a chosen address and date, tracks pickup status in real time via a live timeline, displays a QR code for collector identity verification, and views recycling history and earned reward wallet.
+**User (E-Waste Producer)** uploads e-waste with photos and metadata, receives an AI-estimated price and CO2 projection, schedules a pickup, tracks status through a live timeline, shows a QR code for collector verification, and views their reward wallet with points and CO2 credits.
 
-**Collector** views assigned pickups on an interactive map, accepts or rejects assignments, updates status through each stage of the pickup lifecycle, uploads photographic proof of collection, and records the final collected weight and price upon delivery.
+**Collector** views assigned pickups on an interactive map, accepts or rejects assignments, updates status at each stage, uploads a photo as proof of collection, and records the final collected weight and price on delivery.
 
-**Recycler** receives delivered waste batches from collectors, starts processing with a decision (recycle or refurbish), updates inventory, logs direct payments to users, and marks pickups as completed — automatically triggering reward point and CO₂ credit generation for the producer.
+**Recycler** receives delivered waste batches, submits a processing decision (recycle or refurbish), updates inventory, logs a direct payment to the producer, and marks the pickup as completed, which triggers automatic reward generation.
 
 → [Full API reference, repository pattern, and database schema](backend/README.md)
 
@@ -37,17 +37,17 @@ RenewGrid is a full-stack e-waste lifecycle management platform that connects co
 
 | Area | What I implemented | Repository evidence |
 | :----- | :----- | :----- |
-| **AI pricing engine** | Rule-based estimator that reads admin-defined `PricingRule` rows from the database; applies category base price, per-kg rate, and condition multipliers (working / partial / broken); falls back to hardcoded category rates if no active rule exists for the given category | `backend/app/services/waste_service.py` |
-| **JWT authentication** | Dual-token system with configurable short-lived access tokens and 7-day refresh tokens; all protected routes verified via `get_current_user` FastAPI dependency; login endpoint rate-limited at 5 requests/minute via slowapi | `backend/app/core/security.py`, `backend/app/routers/auth.py` |
-| **RBAC — 4 role system** | Role enum enforced at the API layer through FastAPI dependency injection and at the frontend through `ProtectedRoute` wrappers; Admin, User, Collector, and Recycler each access a completely isolated dashboard with no route overlap | `backend/app/core/deps.py`, `frontend/src/components/auth_routes/` |
-| **Pickup lifecycle state machine** | 12-state status enum (`PENDING → ASSIGNED → IN_PROGRESS → PROOF_UPLOADED → COLLECTED → DELIVERED → PROCESSING → COMPLETED`); every transition is validated against the current state and persisted to an immutable `pickup_status_history` audit table with actor ID and timestamp | `backend/app/models/core.py`, `backend/app/services/collector_service.py`, `backend/app/services/recycler_service.py` |
-| **QR code verification** | Server-generated QR codes per pickup request, rendered in the user's dashboard; scanned by the collector's device camera using html5-qrcode; verifies pickup identity before allowing status progression | `backend/app/routers/pickup.py`, `frontend/src/pages/user/QRDisplay.jsx`, `frontend/src/pages/collector/CollectorPages.jsx` |
-| **Reward & CO₂ engine** | Background task triggered on pickup completion; awards points at 10 pts/kg and calculates CO₂ saved at 0.5 kg/kg of waste collected; idempotent — checks for existing reward before inserting; pushes an in-app notification to the user on success | `backend/app/services/reward_service.py` |
-| **Collector proof upload** | Collectors upload a photo as evidence of collection; file validated by content type and size (5 MB cap); stored to `uploads/proofs/` and linked to the pickup record via a dedicated `CollectorProof` model | `backend/app/services/collector_service.py`, `backend/app/models/core.py` |
-| **Transactional email** | Password-reset flow with an HTML email template dispatched via SMTP as a FastAPI `BackgroundTask`; STARTTLS Gmail-compatible; 30-minute token expiry; credentials and frontend URL read from environment variables | `backend/app/services/email_service.py` |
-| **Repository pattern** | Decoupled data access layer separating all query logic from service and router logic; one repository module per domain (user, waste, pickup, collector, recycler) | `backend/app/repositories/` |
-| **Admin analytics** | Dashboard aggregates across users, waste, pickups, revenue, CO₂ saved, and geographic area; trend forecasting, pricing rule management, user/collector creation, reward point assignment, and PDF report export | `backend/app/services/admin_service.py`, `frontend/src/pages/admin/AdminPages.jsx` |
-| **File upload handling** | Profile images and waste photos validated on content type (JPEG / PNG / WebP / GIF) and file size (5 MB cap); saved with UUID-prefixed filenames to role-specific subdirectories under `uploads/` and served as FastAPI static files | `backend/app/routers/auth.py`, `backend/app/services/waste_service.py` |
+| **AI pricing engine** | On each waste submission, the service queries active `PricingRule` rows from the database for the item's category. It applies a base price, a per-kg rate, and a condition multiplier (1.0 for working, 0.6 for partial, 0.3 for broken). When no active rule exists for a category, it falls back to hardcoded rates across 7 categories. The CO2 and credit point estimates are calculated at the same time | `backend/app/services/waste_service.py` |
+| **JWT authentication** | Access tokens and refresh tokens are signed with separate secrets. Tokens are created and verified in `security.py` using python-jose. Password hashing calls bcrypt directly because passlib 1.7.4 is incompatible with bcrypt 4.x. The login endpoint is rate-limited to 5 requests per minute via slowapi | `backend/app/core/security.py`, `backend/app/routers/auth.py` |
+| **RBAC with 4 roles** | The `UserRole` enum defines `user`, `collector`, `recycler`, and `admin`. FastAPI dependency functions enforce the role at the API layer. On the frontend, `ProtectedRoute` components check the stored role before rendering any dashboard page | `backend/app/core/deps.py`, `frontend/src/components/auth_routes/` |
+| **Pickup lifecycle (13 states)** | The `PickupStatus` enum defines 13 values. The documented production flow runs from PENDING through ASSIGNED, ACCEPTED, IN_PROGRESS, PROOF_UPLOADED, COLLECTED, DELIVERED, PROCESSING, to COMPLETED or RECYCLED. CANCELLED and REJECTED are terminal states. Every transition is written to `pickup_status_history` with the actor's user ID, timestamp, and an optional note | `backend/app/models/core.py`, `backend/app/services/collector_service.py` |
+| **QR code verification** | The server generates a QR code per pickup. The user displays it on screen. The collector scans it with their device camera using html5-qrcode. The scan must succeed before the collector can advance the pickup status | `backend/app/routers/pickup.py`, `frontend/src/pages/user/QRDisplay.jsx` |
+| **Reward and CO2 engine** | When a pickup reaches COMPLETED, a FastAPI BackgroundTask runs `create_reward_for_pickup`. It awards 10 points per kg and calculates CO2 saved at 0.5 kg per kg collected. It opens its own database session, checks for an existing reward first, and creates a Notification row for the producer on success | `backend/app/services/reward_service.py` |
+| **Collector proof upload** | The collector uploads a photo as evidence of collection. The file is checked against an allowed MIME type list (JPEG, PNG, WebP, GIF) and capped at 5 MB. It is saved to `uploads/proofs/` with a UUID-prefixed filename and linked to the pickup through the `CollectorProof` model | `backend/app/services/collector_service.py`, `backend/app/models/core.py` |
+| **Transactional email** | Password reset emails are built from an HTML template and dispatched via Python smtplib as a FastAPI BackgroundTask. The setup uses STARTTLS on port 587 and is compatible with Gmail App Passwords. Reset tokens expire after 30 minutes. All SMTP credentials come from environment variables | `backend/app/services/email_service.py` |
+| **Repository pattern** | Each domain has its own repository module: auth, user, waste, pickup, collector, and recycler. All database queries live in the repository layer. Services call repositories. Routers call services. No query logic appears in routers | `backend/app/repositories/` |
+| **Admin analytics dashboard** | The admin dashboard aggregates users, waste volume, pickups by status, CO2 saved, revenue, and geographic distribution. It includes trend forecasting, pricing rule management, manual reward assignment, and PDF report export | `backend/app/services/admin_service.py` |
+| **File upload handling** | Waste images and profile photos are validated by content type and file size (5 MB cap). Files are saved with UUID-prefixed names to role-specific subdirectories under `uploads/` and served through FastAPI's StaticFiles mount | `backend/app/routers/auth.py`, `backend/app/services/waste_service.py` |
 
 ---
 
@@ -57,58 +57,62 @@ RenewGrid is a full-stack e-waste lifecycle management platform that connects co
 
 | Component | Technology |
 | :----- | :----- |
-| **Frontend** | React 19 · Vite 8 · React Router v7 |
-| **Backend** | Python · FastAPI · SQLAlchemy · Alembic |
+| **Frontend** | React 19, Vite 8, React Router v7 |
+| **Backend** | Python, FastAPI, SQLAlchemy, Alembic |
 | **Database** | PostgreSQL |
-| **Authentication** | JWT via python-jose and passlib/bcrypt |
-| **Maps** | Leaflet + React-Leaflet |
-| **PDF generation** | jsPDF + jsPDF-AutoTable |
+| **Authentication** | JWT via python-jose, bcrypt for password hashing |
+| **Maps** | Leaflet, React-Leaflet |
+| **PDF generation** | jsPDF, jsPDF-AutoTable |
 | **QR scanning** | html5-qrcode |
 | **Styling** | TailwindCSS v3 |
 | **Rate limiting** | slowapi |
-| **Email** | Python smtplib (STARTTLS / Gmail App Password) |
+| **Email** | Python smtplib, STARTTLS, Gmail App Password |
 
 ### Full Stack Overview
 
 | Technology | How it is used | Why it was used |
 | :----- | :----- | :----- |
-| **FastAPI** | REST API server; all business logic, authentication, file serving, and background tasks | Auto-generates OpenAPI/Swagger docs, native Pydantic v2 validation, async-capable, production-grade |
-| **SQLAlchemy** | ORM for all database models, queries, and relationships | Declarative `Mapped` typed columns, relationship management, decoupled from raw SQL |
-| **Alembic** | Database migration management | Version-controlled schema evolution alongside source code |
-| **PostgreSQL** | Primary relational database | ACID compliance, native enum type support, production-grade reliability |
-| **React 19** | Single-page application with four fully isolated role dashboards | Component model, concurrent rendering, broad ecosystem |
-| **Vite 8** | Frontend build tool and dev server | Sub-second HMR, ESM-native, minimal configuration overhead |
-| **TailwindCSS v3** | Utility-first styling across all dashboards | Rapid, consistent UI development without context-switching from JSX |
-| **Leaflet** | Interactive map for collector route and location view | Lightweight, open-source, no API key requirement |
-| **slowapi** | Request rate limiting middleware on FastAPI | Protects login and password-reset endpoints from brute-force and abuse |
-| **python-jose** | JWT encoding, decoding, and verification | Lightweight, supports HS256, handles access and refresh token rotation cleanly |
-| **qrcode** | Server-side QR code image generation | Generates pickup verification codes without external service dependency |
+| **FastAPI** | REST API server for all business logic, auth, file serving, and background tasks | Auto-generates OpenAPI docs, native Pydantic v2 validation, async-capable |
+| **SQLAlchemy** | ORM for all models and queries | Typed `Mapped` columns, relationship management, decoupled from raw SQL |
+| **Alembic** | Database migration management | Version-controlled schema changes alongside code |
+| **PostgreSQL** | Primary relational database | ACID compliance, native enum type support |
+| **React 19** | Single-page application with four role dashboards | Component model, fast rendering, broad ecosystem |
+| **Vite 8** | Frontend build tool and dev server | Sub-second HMR, ESM-native |
+| **TailwindCSS v3** | Utility-first styling | Consistent UI development without leaving JSX |
+| **Leaflet** | Interactive map for collector location view | Lightweight, open-source, no API key required |
+| **slowapi** | Request rate limiting on FastAPI | Protects login and password reset endpoints |
+| **python-jose** | JWT encoding and decoding | Lightweight, supports HS256, handles dual-secret token setup |
+| **bcrypt** | Password hashing | Used directly due to passlib incompatibility with bcrypt 4.x |
+| **qrcode** | Server-side QR code image generation | No external service dependency |
 
 ---
 
 ## Pickup Status Lifecycle
 
+The `PickupStatus` enum defines 13 values. The production flow:
+
 ```
 PENDING
-  └─► ASSIGNED ──────────────────────────────────────────► REJECTED
-        └─► IN_PROGRESS ────────────────────────────────► REJECTED
-              └─► PROOF_UPLOADED
-                    └─► COLLECTED
-                          └─► DELIVERED
-                                └─► PROCESSING
-                                      └─► COMPLETED ◄─── RECYCLED
-                                                └─► CANCELLED (admin)
+  └─ ASSIGNED
+       └─ ACCEPTED
+            └─ IN_PROGRESS
+                 └─ PROOF_UPLOADED
+                      └─ COLLECTED
+                           └─ DELIVERED
+                                └─ PROCESSING
+                                     └─ COMPLETED
+                                     └─ RECYCLED (also resolves to COMPLETED)
+
+Terminal states: REJECTED, CANCELLED
 ```
 
-Every transition is recorded in `pickup_status_history` with the actor user ID, timestamp, and an optional note — providing a full, immutable audit trail per pickup.
+Every transition is recorded in `pickup_status_history` with the actor user ID, timestamp, and an optional note.
 
 ---
 
 ## Setup
 
 ### 1. Database
-
-Ensure PostgreSQL is running and create the application database:
 
 ```sql
 CREATE DATABASE renewgrid;
@@ -119,27 +123,26 @@ CREATE DATABASE renewgrid;
 ```bash
 cd backend
 
-# Copy environment template and configure credentials
+# Copy the environment template
 copy .env.example .env
 # Edit .env: set DATABASE_URL, SECRET_KEY, REFRESH_SECRET_KEY
-# Optionally set SMTP_HOST, SMTP_USER, SMTP_PASS for email
+# For email: set SMTP_USER and SMTP_PASS (Gmail App Password)
 
-# Create and activate virtual environment
+# Create virtual environment
 python -m venv venv
-venv\Scripts\activate           # Windows PowerShell / CMD
+venv\Scripts\activate           # Windows
 # source venv/bin/activate      # macOS / Linux
 
-# Install dependencies
 pip install -r requirements.txt
 
-# Create tables and seed demo data
+# Create tables and seed demo users
 python scripts/seed.py
 
 # Start the API server
 uvicorn app.main:app --reload
 ```
 
-Backend runs at `http://localhost:8000` · Interactive API docs at `http://localhost:8000/docs`
+Backend runs at `http://localhost:8000`. Swagger UI is at `http://localhost:8000/docs`.
 
 ### 3. Frontend
 
@@ -149,7 +152,7 @@ npm install
 npm run dev
 ```
 
-Frontend runs at `http://localhost:5173`
+Frontend runs at `http://localhost:5173`.
 
 ### One-command launch (Windows)
 
@@ -157,7 +160,7 @@ Frontend runs at `http://localhost:5173`
 run.bat
 ```
 
-Opens both the backend and frontend servers in separate terminal windows.
+Opens both servers in separate terminal windows.
 
 ---
 
@@ -174,32 +177,32 @@ Opens both the backend and frontend servers in separate terminal windows.
 
 ## Project Structure
 
-```text
+```
 RenewGrid/
-├── backend/                        # FastAPI application server
+├── backend/                        # FastAPI application
 │   ├── app/
 │   │   ├── core/                   # Config, JWT security, dependencies, exception handlers
 │   │   ├── db/                     # SQLAlchemy engine and session factory
 │   │   ├── models/                 # ORM models: User, WasteUpload, PickupRequest, Reward, ...
-│   │   ├── repositories/           # Data access layer — one repository per domain
-│   │   ├── routers/                # REST controllers: auth, waste, pickup, collector, recycler, admin
+│   │   ├── repositories/           # Data access layer: auth, user, waste, pickup, collector, recycler
+│   │   ├── routers/                # REST controllers: auth, users, waste, pickup, collector, recycler, admin
 │   │   ├── schemas/                # Pydantic request and response schemas
 │   │   └── services/               # Business logic: AI estimator, rewards, email, admin analytics
 │   ├── migrations/                 # Alembic migration scripts
-│   ├── scripts/                    # seed.py · reset_passwords.py · fix_db_schema.py
-│   ├── uploads/                    # Runtime file storage (gitignored — .gitkeep preserves directory)
+│   ├── scripts/                    # seed.py, reset_passwords.py, fix_db_schema.py
+│   ├── uploads/                    # Runtime file storage (.gitkeep preserves the directory)
 │   ├── .env.example                # Environment variable template
-│   └── requirements.txt            # Python dependencies
+│   └── requirements.txt
 │
 └── frontend/                       # React 19 + Vite SPA
     ├── src/
-    │   ├── components/             # Shared UI components, layout, and route guards
+    │   ├── components/             # Shared UI components and route guards
     │   ├── pages/
-    │   │   ├── admin/              # Admin dashboard, user/collector management, analytics, reports
+    │   │   ├── admin/              # Admin dashboard, user management, analytics, reports
     │   │   ├── collector/          # Assigned pickups, QR scan, proof upload, availability
-    │   │   ├── recycler/           # Waste receipt, AI recommendation, processing, inventory
-    │   │   └── user/               # Upload, AI price estimate, schedule, tracking, rewards
-    │   └── services/               # Axios API service layer (api.js)
-    ├── public/                     # Static assets and favicon
-    └── index.html                  # Application entry point
+    │   │   ├── recycler/           # Waste receipt, processing, inventory
+    │   │   └── user/               # Upload, AI estimate, schedule, tracking, rewards
+    │   └── services/               # Axios API client (api.js)
+    ├── public/
+    └── index.html
 ```
