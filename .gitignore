@@ -12,9 +12,21 @@ pyenv/
 
 # Python caching
 __pycache__/
-*.pyc
+*.py[cod]
 *.pyo
 *.pyd
+*.egg-info/
+.eggs/
+
+# Test and coverage
+.pytest_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# Type checking and linting
+.mypy_cache/
+.ruff_cache/
 
 # Local Database files
 *.db
@@ -55,6 +67,7 @@ out/
 *.njsproj
 *.sln
 *.sw?
+Thumbs.db
 
 # Uploaded Media and temporary files
 backend/uploads/*

@@ -1,14 +1,33 @@
+# RenewGrid Backend — Direct Dependencies
+# ─────────────────────────────────────────────────────────────────────────────
+# Pin to exact versions for reproducibility.
+# To regenerate: activate venv → pip freeze > requirements.txt
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Web framework
 fastapi
 uvicorn[standard]
+
+# Database
 sqlalchemy
 psycopg2-binary
 alembic
+
+# Authentication
 python-jose[cryptography]
-passlib[bcrypt]
 bcrypt
+
+# Request handling
 python-multipart
+
+# Configuration
 pydantic-settings
+
+# Validation
 email-validator
-python-dotenv
+
+# QR code generation
 qrcode[pil]
+
+# Rate limiting
 slowapi
