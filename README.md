@@ -33,6 +33,30 @@ RenewGrid is a full-stack e-waste lifecycle management platform. Users submit e-
 
 ---
 
+## DevOps & CI/CD
+
+[![RenewGrid CI/CD](https://github.com/Aoun62336/RenewGrid-DevOps/actions/workflows/renewgrid-cicd.yml/badge.svg)](https://github.com/Aoun62336/RenewGrid-DevOps/actions/workflows/renewgrid-cicd.yml)
+
+RenewGrid implements an automated CI/CD pipeline using **GitHub Actions, Docker Buildx, GitHub Container Registry (GHCR), and Docker Compose**.
+
+The pipeline validates the React frontend and FastAPI backend, builds and publishes versioned container images, and verifies deployment through Docker Compose with PostgreSQL and Alembic migrations.
+
+**[View CI/CD Architecture, Deployment Guide & Execution Evidence →](DEVOPS.md)**
+
+### Verified CI/CD Pipeline
+
+| Stage | Implementation | Result |
+|---|---|---|
+| Continuous Integration | Frontend build and backend smoke tests | Passed |
+| Container Publication | Docker Buildx and GHCR | Passed |
+| Deployment Verification | Docker Compose, PostgreSQL and HTTP checks | Passed |
+
+**[View Successful GitHub Actions Run](https://github.com/Aoun62336/RenewGrid-DevOps/actions/runs/39774801095)**
+
+**Deployment model:** Automated verification on ephemeral GitHub-hosted runners, with local persistent Docker Compose support.
+
+---
+
 ## What I Implemented
 
 | Area | What I implemented | Repository evidence |
@@ -189,7 +213,7 @@ RenewGrid/
 │   │   ├── schemas/                # Pydantic request and response schemas
 │   │   └── services/               # Business logic: AI estimator, rewards, email, admin analytics
 │   ├── migrations/                 # Alembic migration scripts
-│   ├── scripts/                    # seed.py, reset_passwords.py, fix_db_schema.py
+│   ├── scripts/                    # seed.py, reset_passwords.py
 │   ├── uploads/                    # Runtime file storage (.gitkeep preserves the directory)
 │   ├── .env.example                # Environment variable template
 │   └── requirements.txt
