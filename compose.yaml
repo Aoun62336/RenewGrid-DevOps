@@ -1,0 +1,116 @@
+
+name: renewgrid
+
+services:
+  db:
+    image: postgres:17-alpine
+
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-renewgrid}
+      POSTGRES_USER: ${POSTGRES_USER:-renewgrid}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+    networks:
+      - data
+
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB
+      interval: 5s
+      timeout: 4s
+      retries: 12
+      start_period: 10s
+
+    restart: unless-stopped
+
+  migrate:
+    image: ${API_IMAGE:-renewgrid-api:local}
+
+    build:
+      context: ./backend
+
+    working_dir: /app
+
+    environment: &backend_env
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-renewgrid}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-renewgrid}
+      SECRET_KEY: ${SECRET_KEY:?Set SECRET_KEY}
+      REFRESH_SECRET_KEY: ${REFRESH_SECRET_KEY:?Set REFRESH_SECRET_KEY}
+      APP_ENV: ${APP_ENV:-development}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      FRONTEND_URL: http://localhost:${APP_PORT:-8080}
+      SMTP_HOST: ""
+      SMTP_USER: ""
+      SMTP_PASS: ""
+      PYTHONUNBUFFERED: "1"
+
+    command:
+      - alembic
+      - upgrade
+      - head
+
+    depends_on:
+      db:
+        condition: service_healthy
+
+    networks:
+      - data
+
+    restart: "no"
+
+  api:
+    image: ${API_IMAGE:-renewgrid-api:local}
+
+    build:
+      context: ./backend
+
+    environment: *backend_env
+
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+    volumes:
+      - uploads_data:/app/uploads
+
+    networks:
+      - web
+      - data
+
+    expose:
+      - "8000"
+
+    restart: unless-stopped
+
+  web:
+    image: ${WEB_IMAGE:-renewgrid-web:local}
+
+    build:
+      context: ./frontend
+
+    depends_on:
+      api:
+        condition: service_healthy
+
+    ports:
+      - "127.0.0.1:${APP_PORT:-8080}:8080"
+
+    networks:
+      - web
+
+    restart: unless-stopped
+
+networks:
+  web: {}
+
+  data:
+    internal: true
+
+volumes:
+  postgres_data: {}
+  uploads_data: {}
