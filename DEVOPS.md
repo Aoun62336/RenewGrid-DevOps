@@ -372,11 +372,3 @@ The project separates application validation, container-image publication, and d
 By combining Docker, GHCR, PostgreSQL, Alembic, Nginx, and Docker Compose, the implementation provides a reproducible delivery workflow with health-based startup checks, immutable release references, and traceable execution evidence.
 
 The result is a practical demonstration of containerization, continuous integration, container registry management, deployment orchestration, and CI/CD troubleshooting.
-
----
-
-**Project:** RenewGrid
-
-**Program:** Elevate Labs — DevOps Internship
-
-**Task:** Automate Code Deployment Using a CI/CD Pipeline
