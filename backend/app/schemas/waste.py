@@ -3,8 +3,9 @@ schemas/waste.py — Pydantic schemas for waste upload endpoints.
 """
 from datetime import datetime
 from typing import List, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer
 from app.models.waste import WasteCategory
+from app.core.media_security import media_url
 
 
 class WasteImageOut(BaseModel):
@@ -13,6 +14,10 @@ class WasteImageOut(BaseModel):
     is_primary: bool
     uploaded_at: datetime
     model_config = {"from_attributes": True}
+
+    @field_serializer("image_url")
+    def serialize_image_url(self, value: str) -> str | None:
+        return media_url(value)
 
 
 class WasteUploadCreate(BaseModel):

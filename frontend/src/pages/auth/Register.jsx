@@ -4,7 +4,6 @@ import { authAPI } from '../../services/api';
 
 export default function Register() {
   const navigate = useNavigate();
-  const [role, setRole] = useState('recycler');
   const [showPass, setShowPass] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
   const [error, setError] = useState('');
@@ -30,7 +29,6 @@ export default function Register() {
         email,
         password,
         full_name: fullName,
-        role: role.toLowerCase(),
       });
       navigate('/login');
     } catch (err) {
@@ -60,7 +58,8 @@ export default function Register() {
           <div className="absolute bottom-20 left-12 right-12 z-20 text-white">
             <h2 className="text-4xl font-bold mb-4 leading-tight">Driving the Circular Economy through AI.</h2>
             <p className="text-lg text-primary-light/90 max-w-md">
-              Join thousands of recyclers and collectors worldwide in managing the e-waste lifecycle responsibly.
+              Manage e-waste responsibly, schedule convenient pickups,
+              and track your environmental impact.
             </p>
           </div>
         </div>
@@ -73,8 +72,12 @@ export default function Register() {
               <span className="text-2xl font-black tracking-tighter text-[#326669]">RenewGrid</span>
             </div>
             <div className="mb-10">
-              <h1 className="text-3xl font-extrabold text-slate-900 mb-2">Join RenewGrid</h1>
-              <p className="text-slate-500">Choose your role to get started.</p>
+              <h1 className="text-3xl font-extrabold text-slate-900 mb-2">
+                Join RenewGrid
+              </h1>
+              <p className="text-slate-500">
+                Create your user account to get started.
+              </p>
             </div>
             <form className="space-y-6" onSubmit={handleRegister}>
               {error && (
@@ -82,38 +85,6 @@ export default function Register() {
                   {error}
                 </div>
               )}
-              <div className="space-y-3">
-                <label className="text-sm font-semibold text-slate-700">I am a...</label>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                  <div>
-                    <input checked={role === 'recycler'} onChange={() => setRole('recycler')} className="hidden role-option" id="role-recycler" name="role" type="radio" value="recycler" />
-                    <label
-                      className="flex items-center justify-center py-2.5 px-3 border border-primary-light rounded-xl text-sm font-medium text-primary hover:bg-primary-light/30 cursor-pointer transition-all text-center"
-                      htmlFor="role-recycler"
-                    >
-                      Recycler
-                    </label>
-                  </div>
-                  <div>
-                    <input checked={role === 'collector'} onChange={() => setRole('collector')} className="hidden role-option" id="role-collector" name="role" type="radio" value="collector" />
-                    <label
-                      className="flex items-center justify-center py-2.5 px-3 border border-primary-light rounded-xl text-sm font-medium text-primary hover:bg-primary-light/30 cursor-pointer transition-all text-center"
-                      htmlFor="role-collector"
-                    >
-                      Collector
-                    </label>
-                  </div>
-                  <div>
-                    <input checked={role === 'user'} onChange={() => setRole('user')} className="hidden role-option" id="role-user" name="role" type="radio" value="user" />
-                    <label
-                      className="flex items-center justify-center py-2.5 px-3 border border-primary-light rounded-xl text-sm font-medium text-primary hover:bg-primary-light/30 cursor-pointer transition-all text-center"
-                      htmlFor="role-user"
-                    >
-                      User
-                    </label>
-                  </div>
-                </div>
-              </div>
               <div className="space-y-4">
                 <div>
                   <label className="block text-sm font-semibold text-slate-700 mb-1.5" htmlFor="name">

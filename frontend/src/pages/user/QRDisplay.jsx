@@ -2,12 +2,14 @@ import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import DashboardLayout from '../../components/layout/DashboardLayout';
 import UserSidebar from '../../components/layout/UserSidebar';
-import { getToken } from '../../services/api';
+import { pickupAPI } from '../../services/api';
 
 export default function QRDisplay() {
   const { id } = useParams();
   const navigate = useNavigate();
   const [qrUrl, setQrUrl] = useState(null);
+  const [manualCode, setManualCode] = useState('');
+  const [expiresAt, setExpiresAt] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [copied, setCopied] = useState(false);
@@ -15,20 +17,10 @@ export default function QRDisplay() {
   useEffect(() => {
     const fetchQR = async () => {
       try {
-        const token = getToken();
-        const response = await fetch(`http://localhost:8000/pickup/qr/${id}`, {
-          headers: {
-            'Authorization': `Bearer ${token}`
-          }
-        });
-        
-        if (!response.ok) {
-          throw new Error('Failed to load QR code. You may not have permission.');
-        }
-
-        const blob = await response.blob();
-        const url = URL.createObjectURL(blob);
-        setQrUrl(url);
+        const credentials = await pickupAPI.qr(id);
+        setQrUrl(credentials.image_data_url);
+        setManualCode(credentials.manual_code);
+        setExpiresAt(credentials.expires_at);
       } catch (err) {
         setError(err.message);
       } finally {
@@ -51,7 +43,7 @@ export default function QRDisplay() {
   };
 
   const handleCopy = () => {
-    navigator.clipboard.writeText(`PK-${id}`);
+    navigator.clipboard.writeText(manualCode);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -89,14 +81,15 @@ export default function QRDisplay() {
               <div className="bg-slate-50 rounded-xl p-4 border border-slate-200">
                 <p className="text-xs text-slate-500 mb-2 font-medium">MANUAL ENTRY CODE</p>
                 <div className="flex items-center justify-center gap-2">
-                  <span className="font-mono font-bold text-xl tracking-widest text-primary">PK-{id}</span>
+                  <span className="font-mono font-bold text-sm break-all text-primary">{manualCode || 'Unavailable'}</span>
                   <button onClick={handleCopy} className="text-slate-400 hover:text-primary transition-colors">
                     <span className="material-symbols-outlined text-sm">{copied ? 'check' : 'content_copy'}</span>
                   </button>
                 </div>
               </div>
               
-              <button 
+              <p className="text-xs text-slate-500">Valid until {expiresAt ? new Date(expiresAt).toLocaleTimeString() : '—'}. Reload this page for a new code after expiration.</p>
+              <button
                 onClick={handleDownload}
                 className="w-full py-4 bg-primary text-white rounded-xl font-bold text-lg shadow-xl shadow-primary/20 hover:shadow-2xl transition-all hover:scale-[1.01] active:scale-[0.99] flex items-center justify-center gap-2"
               >
@@ -117,7 +110,7 @@ export default function QRDisplay() {
           </p>
           <div className="flex items-center gap-3">
             <div className="flex-1 bg-white border-2 border-amber-300 rounded-xl px-5 py-3 text-center select-all">
-              <span className="text-2xl font-black tracking-widest text-amber-800 font-mono">PK-{id}</span>
+              <span className="text-2xl font-black tracking-widest text-amber-800 font-mono">{manualCode || 'Unavailable'}</span>
             </div>
             <button
               onClick={handleCopy}
@@ -130,7 +123,7 @@ export default function QRDisplay() {
             </button>
           </div>
           <p className="text-[10px] text-amber-600 mt-3 text-center font-medium">
-            Also accepted: just the number <strong>{id}</strong>
+            The pickup number alone cannot verify a handoff.
           </p>
         </div>
 

@@ -78,6 +78,19 @@ def generate_qr(
 ):
     return pickup_service.generate_qr(db, current_user, pickup_id)
 
+# ─── GET /pickup/qr-credentials/{pickup_id} ──────────────────────────────────
+@router.get("/qr-credentials/{pickup_id}", summary="Short-lived pickup QR and manual handoff code")
+def qr_credentials(
+    pickup_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    from fastapi.responses import JSONResponse
+    return JSONResponse(
+        pickup_service.generate_qr_credentials(db, current_user, pickup_id),
+        headers={"Cache-Control": "no-store"},
+    )
+
 # ─── POST /pickup/review/{pickup_id} ─────────────────────────────────────────
 @router.post("/review/{pickup_id}", status_code=201, summary="Submit a review for a pickup")
 def submit_review(

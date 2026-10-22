@@ -28,10 +28,10 @@ export default function AdminSidebar({ isOpen, setIsOpen }) {
   const handleLogout = async () => {
     try {
       await api.auth.logout();
-    } catch (e) {
-      console.error('Logout failed:', e);
-    } finally {
-      navigate('/');
+      navigate('/login', { replace: true });
+    } catch (error) {
+      console.error('Server logout failed:', error);
+      alert('Could not securely log out. Please try again.');
     }
   };
 

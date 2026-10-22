@@ -1,1 +1,4 @@
 Generic single-database configuration.
+
+See `migrations/versions/` for the full migration history.
+Run `alembic upgrade head` from the `backend/` directory to apply all migrations.

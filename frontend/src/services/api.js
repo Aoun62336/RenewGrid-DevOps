@@ -6,119 +6,173 @@
  *   const data = await api.login({ email, password });
  */
 
-export const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const configuredApiUrl = import.meta.env.VITE_API_URL?.trim();
 
-// ─── Token helpers ─────────────────────────────────────────────────────────
+export const BASE_URL = configuredApiUrl
+  ? configuredApiUrl.replace(/\/+$/, '')
+  : '';
+
+// ─── Authentication session state ──────────────────────────────────────────
+
+// Access credentials exist only in memory, never browser storage.
+let accessToken = null;
+let sessionUser = null;
+let refreshPromise = null;
+
+const ROLES = ['admin', 'recycler', 'collector', 'user'];
+
+function storeSession(data) {
+  accessToken = data.access_token;
+  sessionUser = data.user;
+
+  const role = data.user.role.toLowerCase();
+
+  // Remove any credentials left by earlier RenewGrid versions.
+  for (const item of ROLES) {
+    localStorage.removeItem(`${item}_access_token`);
+    localStorage.removeItem(`${item}_refresh_token`);
+  }
+
+  // Only non-secret profile information is cached for UI compatibility.
+  localStorage.setItem(role, JSON.stringify(data.user));
+
+  return data.user;
+}
+
 export const getActiveRole = () => {
-  const path = window.location.pathname;
-  if (path.startsWith('/admin')) return 'admin';
-  if (path.startsWith('/collector')) return 'collector';
-  if (path.startsWith('/dashboard') || path.startsWith('/collected-waste-listing') || path.startsWith('/waste-receipt') || path.startsWith('/ai-recommendation') || path.startsWith('/processing') || path.startsWith('/inventory') || path.startsWith('/recycler')) return 'recycler';
-  if (path.startsWith('/user') || path.startsWith('/pickup')) return 'user';
-  
-  // fallback for generic pages like /login, check which one exists
-  for (const role of ['admin', 'recycler', 'collector', 'user']) {
-    if (localStorage.getItem(role)) return role;
-  }
-  return 'user';
+  return sessionUser?.role?.toLowerCase() || 'user';
 };
 
-export const getToken = (role = getActiveRole()) => localStorage.getItem(`${role}_access_token`);
-export const getUser  = (role = getActiveRole()) => JSON.parse(localStorage.getItem(role) || 'null');
-export const clearAuth = (role) => {
-  // If no role provided, clear ALL roles to ensure full logout
-  const rolesToClear = role ? [role] : ['admin', 'recycler', 'collector', 'user'];
-  for (const r of rolesToClear) {
-    localStorage.removeItem(`${r}_access_token`);
-    localStorage.removeItem(`${r}_refresh_token`);
-    localStorage.removeItem(r);
+export const getToken = () => accessToken;
+
+export const getUser = (role = getActiveRole()) => {
+  if (
+    sessionUser &&
+    sessionUser.role?.toLowerCase() === role
+  ) {
+    return sessionUser;
+  }
+  // Fallback: cached profile info (not a credential).
+  return JSON.parse(localStorage.getItem(role) || 'null');
+};
+
+export const clearAuth = () => {
+  accessToken = null;
+  sessionUser = null;
+
+  for (const role of ROLES) {
+    localStorage.removeItem(`${role}_access_token`);
+    localStorage.removeItem(`${role}_refresh_token`);
+    localStorage.removeItem(role);
   }
 };
 
-export const clearAllAuth = () => clearAuth();
+export const clearAllAuth = clearAuth;
 
-/** Redirect to login and wipe all auth state */
 const forceLogout = () => {
   clearAllAuth();
-  // Use replace so the user can't go Back to the protected page
   window.location.replace('/login');
 };
 
-// Track if a token refresh is already in flight to prevent cascading refresh calls
-let _refreshPromise = null;
-
-/** Attempt to refresh access token using the stored refresh token. Returns new access_token or throws. */
 async function attemptTokenRefresh() {
-  const role = getActiveRole();
-  const refresh_token = localStorage.getItem(`${role}_refresh_token`);
-  if (!refresh_token) throw new Error('No refresh token available');
-
-  const res = await fetch(`${BASE_URL}/auth/refresh-token`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ refresh_token }),
-  });
-
-  if (!res.ok) throw new Error('Refresh token expired or invalid');
-
-  const data = await res.json();
-  // Persist the new access token and refresh token
-  localStorage.setItem(`${role}_access_token`, data.access_token);
-  if (data.refresh_token) {
-    localStorage.setItem(`${role}_refresh_token`, data.refresh_token);
+  if (refreshPromise) {
+    return refreshPromise;
   }
-  return data.access_token;
+
+  refreshPromise = (async () => {
+    const response = await fetch(
+      `${BASE_URL}/auth/refresh-token`,
+      {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: {
+          'X-Requested-With': 'XMLHttpRequest',
+        },
+      }
+    );
+
+    if (!response.ok) {
+      throw new Error('Session expired or revoked.');
+    }
+
+    const data = await response.json();
+    storeSession(data);
+    return data;
+  })();
+
+  try {
+    return await refreshPromise;
+  } finally {
+    refreshPromise = null;
+  }
+}
+
+export async function restoreSession() {
+  if (accessToken && sessionUser) {
+    return sessionUser;
+  }
+
+  const data = await attemptTokenRefresh();
+  return data.user;
 }
 
 import toast from 'react-hot-toast';
 
-// ─── Core fetch wrapper with 401 auto-refresh ──────────────────────────────
-async function executeRequest(method, path, body = null, multipart = false, _isRetry = false) {
-  const token = getToken();
-  const headers = {};
-
-  if (token) headers['Authorization'] = `Bearer ${token}`;
-  if (!multipart) headers['Content-Type'] = 'application/json';
-
-  const config = {
-    method,
-    headers,
-    body: body ? (multipart ? body : JSON.stringify(body)) : null,
+async function executeRequest(
+  method,
+  path,
+  body = null,
+  multipart = false,
+  isRetry = false,
+) {
+  const headers = {
+    'X-Requested-With': 'XMLHttpRequest',
   };
 
-  const res = await fetch(`${BASE_URL}${path}`, config);
+  const token = getToken();
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+  if (!multipart) {
+    headers['Content-Type'] = 'application/json';
+  }
 
-  // ── Handle 401: token expired — try refresh once ──
-  if (res.status === 401 && !_isRetry && !path.includes('/auth/refresh-token') && !path.includes('/auth/login')) {
+  const response = await fetch(`${BASE_URL}${path}`, {
+    method,
+    headers,
+    credentials: 'same-origin',
+    body: body
+      ? (multipart ? body : JSON.stringify(body))
+      : null,
+  });
+
+  if (
+    response.status === 401 &&
+    !isRetry &&
+    !path.startsWith('/auth/login') &&
+    !path.startsWith('/auth/refresh-token')
+  ) {
     try {
-      // Deduplicate concurrent refresh calls
-      if (!_refreshPromise) {
-        _refreshPromise = attemptTokenRefresh().finally(() => { _refreshPromise = null; });
-      }
-      await _refreshPromise;
-      // Retry original request with the new token
+      await attemptTokenRefresh();
       return executeRequest(method, path, body, multipart, true);
     } catch {
-      // Refresh failed — session is truly expired; force logout
-      toast.error('Session expired. Please log in again.');
       forceLogout();
-      throw new Error('Session expired. Redirecting to login…');
+      throw new Error('Session expired. Please log in again.');
     }
   }
 
-  // Attempt JSON parse regardless of status
   let data;
-  try { data = await res.json(); } catch { data = {}; }
+  try {
+    data = await response.json();
+  } catch {
+    data = {};
+  }
 
-  if (!res.ok) {
-    if (res.status === 401 && !path.includes('/auth/login')) {
-      forceLogout();
-    }
-    // FastAPI returns { detail: "..." }
-    const msg = typeof data.detail === 'string'
+  if (!response.ok) {
+    const message = typeof data.detail === 'string'
       ? data.detail
       : JSON.stringify(data.detail ?? data);
-    throw new Error(msg || 'API Error');
+    throw new Error(message || 'API request failed.');
   }
 
   return data;
@@ -179,13 +233,10 @@ export const authAPI = {
   /** POST /auth/register */
   register: (body) => post('/auth/register', body),
 
-  /** POST /auth/login → stores tokens in localStorage */
+  /** POST /auth/login — stores session in memory + HttpOnly cookie */
   login: async ({ email, password }) => {
     const data = await post('/auth/login', { email, password });
-    const role = data.user.role.toLowerCase();
-    localStorage.setItem(`${role}_access_token`,  data.access_token);
-    localStorage.setItem(`${role}_refresh_token`, data.refresh_token);
-    localStorage.setItem(role, JSON.stringify(data.user));
+    storeSession(data);
     return data;
   },
 
@@ -195,8 +246,13 @@ export const authAPI = {
   /** PUT /auth/update-profile */
   updateProfile: (body) => put('/auth/update-profile', body),
 
-  /** POST /auth/change-password */
-  changePassword: (body) => post('/auth/change-password', body),
+  /** POST /auth/change-password — revokes sessions server-side, forces re-login */
+  changePassword: async (body) => {
+    const result = await post('/auth/change-password', body);
+    clearAllAuth();
+    window.location.replace('/login');
+    return result;
+  },
 
   /** POST /auth/forgot-password */
   forgotPassword: (body) => post('/auth/forgot-password', body),
@@ -204,21 +260,24 @@ export const authAPI = {
   /** POST /auth/reset-password */
   resetPassword: (body) => post('/auth/reset-password', body),
 
-  /** POST /auth/refresh-token */
-  refreshToken: () => {
-    const role = getActiveRole();
-    const refresh_token = localStorage.getItem(`${role}_refresh_token`);
-    return post('/auth/refresh-token', { refresh_token });
+  /** POST /auth/refresh-token — uses HttpOnly cookie, rotates credential */
+  refreshToken: async () => {
+    return attemptTokenRefresh();
   },
 
-  /** POST /auth/logout */
+  /** POST /auth/logout — revokes session server-side */
   logout: async () => {
-    try { await post('/auth/logout'); } catch { /* ignore logout API errors */ }
-    clearAllAuth(); // Wipe ALL roles so no stale tokens remain
+    await post('/auth/logout');
+    clearAllAuth();
   },
 
   /** DELETE /auth/delete-account */
-  deleteAccount: () => del('/auth/delete-account'),
+  deleteAccount: async () => {
+    const result = await del('/auth/delete-account');
+    clearAllAuth();
+    window.location.replace('/login');
+    return result;
+  },
 
   /** POST /auth/upload-profile-image  (multipart) */
   uploadProfileImage: (file) => {
@@ -279,7 +338,7 @@ export const pickupAPI = {
   track: (pickupId) => get(`/pickup/track/${pickupId}`),
 
   /** GET /pickup/qr/{pickup_id} */
-  qr: (pickupId) => get(`/pickup/qr/${pickupId}`),
+  qr: (pickupId) => get(`/pickup/qr-credentials/${pickupId}`),
 
   /** POST /pickup/review/{pickup_id} */
   submitReview: (pickupId, body) => post(`/pickup/review/${pickupId}`, body),
@@ -295,6 +354,7 @@ export const pickupAPI = {
 //  COLLECTOR MODULE   /collector/*
 // ═══════════════════════════════════════════════════════════════════════════
 export const collectorAPI = {
+  verifyQr: (code) => post('/collector/verify-qr', { code }),
   /** GET /collector/pickups?page=&page_size= */
   myPickups: (page = 1, pageSize = 10) =>
     get(`/collector/pickups?page=${page}&page_size=${pageSize}`),

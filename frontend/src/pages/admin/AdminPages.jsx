@@ -3,7 +3,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import DashboardLayout from '../../components/layout/DashboardLayout';
 import AdminSidebar from '../../components/layout/AdminSidebar';
-import api, { authAPI, notificationsAPI, BASE_URL } from '../../services/api';
+import api, { authAPI, notificationsAPI, BASE_URL, getToken } from '../../services/api';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import ProfileImageCropper from '../../components/common/ProfileImageCropper';
@@ -3102,8 +3102,8 @@ export function NotificationBroadcast() {
     setLoading(true);
     try {
       // Create a temporary axios/fetch call to /admin/broadcast
-      const token = localStorage.getItem('admin_access_token');
-      const res = await fetch('http://localhost:8000/admin/broadcast', {
+      const token = getToken();
+      const res = await fetch(`${BASE_URL}/admin/broadcast`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

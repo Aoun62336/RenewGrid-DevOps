@@ -3,9 +3,10 @@ schemas/pickup.py — Pydantic schemas for pickup lifecycle.
 """
 from datetime import datetime
 from typing import List, Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, field_serializer
 from app.models.core import PickupStatus
 from app.schemas.auth import UserPublic
+from app.core.media_security import media_url
 
 
 class PickupCreate(BaseModel):
@@ -31,6 +32,10 @@ class CollectorProofOut(BaseModel):
     notes: Optional[str]
     uploaded_at: datetime
     model_config = {"from_attributes": True}
+
+    @field_serializer("image_url")
+    def serialize_image_url(self, value: str) -> str | None:
+        return media_url(value)
 
 
 class PickupResponse(BaseModel):

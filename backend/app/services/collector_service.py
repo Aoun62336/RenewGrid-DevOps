@@ -2,8 +2,6 @@
 services/collector_service.py — Business logic for collector actions.
 State machine: ASSIGNED → ACCEPTED → IN_ROUTE → IN_PROGRESS → COLLECTED → COMPLETED
 """
-import shutil
-import uuid
 from pathlib import Path
 from typing import List, Tuple, Dict, Any, Optional
 from fastapi import HTTPException, UploadFile
@@ -14,9 +12,12 @@ from app.models.core import CollectorProof, PickupRequest, PickupStatus
 from app.schemas.pickup import WeightUpdateIn
 from app.repositories.collector_repository import collector_repo
 from app.repositories.pickup_repository import pickup_repo
-
-PROOF_DIR = Path("uploads/proofs")
-PROOF_DIR.mkdir(parents=True, exist_ok=True)
+from app.core.upload_security import (
+    prepare_image,
+    save_prepared_image,
+    delete_uploaded_path,
+)
+from app.core.media_security import media_url
 
 def _get_my_pickup(db: Session, pickup_id: int, collector_id: int) -> PickupRequest:
     pickup = collector_repo.get_my_pickup(db, pickup_id, collector_id)
@@ -56,48 +57,73 @@ def reject_pickup(db: Session, collector: User, pickup_id: int, reason: Optional
     return {"message": f"Pickup #{pickup_id} rejected.", "pickup_id": pickup_id}
 
 # ─── State: IN_PROGRESS → PROOF_UPLOADED ───────────────────────────────────────
-def upload_proof(db: Session, collector: User, pickup_id: int, notes: Optional[str], image: UploadFile) -> Dict[str, str]:
-    pickup = _get_my_pickup(db, pickup_id, collector.id)
-    allowed = (PickupStatus.IN_PROGRESS, PickupStatus.PROOF_UPLOADED)
-    if pickup.status not in allowed:
-         if pickup.status == PickupStatus.PROCESSING:
-             raise HTTPException(status_code=400, detail="The recycler has already started processing this waste. You can no longer upload proof.")
-         raise HTTPException(status_code=400, detail=f"Must be in 'Start Processing' (IN_PROGRESS) status to upload proof (current: {pickup.status.value}).")
+def upload_proof(
+    db: Session,
+    collector: User,
+    pickup_id: int,
+    notes: Optional[str],
+    image: UploadFile,
+) -> Dict[str, str]:
+    pickup = _get_my_pickup(
+        db,
+        pickup_id,
+        collector.id,
+    )
+    if pickup.status not in (
+        PickupStatus.IN_PROGRESS,
+        PickupStatus.PROOF_UPLOADED,
+    ):
+        if pickup.status == PickupStatus.PROCESSING:
+            raise HTTPException(
+                status_code=400,
+                detail="The recycler has already started processing this waste. You can no longer upload proof.",
+            )
+        raise HTTPException(
+            status_code=400,
+            detail=f"Must be in 'Start Processing' (IN_PROGRESS) status to upload proof (current: {pickup.status.value}).",
+        )
 
-    # Ensure filename is safe and unique
+    prepared = prepare_image(image)
+    previous_path = (
+        pickup.collector_proof.image_url
+        if pickup.collector_proof
+        else None
+    )
+    new_path = save_prepared_image(
+        prepared,
+        folder="proofs",
+    )
     try:
-        ext = Path(image.filename).suffix if image.filename else ".jpg"
-        if not ext: ext = ".jpg"
-        filename = f"{uuid.uuid4().hex}{ext}"
-        
-        # Ensure directory exists (redundant but safe)
-        PROOF_DIR.mkdir(parents=True, exist_ok=True)
-        
-        dest = PROOF_DIR / filename
-        with dest.open("wb") as out:
-            shutil.copyfileobj(image.file, out)
-        
-        url = f"/uploads/proofs/{filename}"
-
-        # Update or create proof record
         proof = pickup.collector_proof
         if proof:
-            proof.image_url = url
+            proof.image_url = new_path
             proof.notes = notes
         else:
-            db.add(CollectorProof(pickup_id=pickup_id, image_url=url, notes=notes))
+            db.add(CollectorProof(pickup_id=pickup_id, image_url=new_path, notes=notes))
 
-        # Advance status to PROOF_UPLOADED
         pickup.status = PickupStatus.PROOF_UPLOADED
-        pickup_repo.add_history(db, pickup.id, PickupStatus.PROOF_UPLOADED, collector.id, "Collector uploaded proof image")
-        
+        pickup_repo.add_history(
+            db, pickup.id, PickupStatus.PROOF_UPLOADED, collector.id,
+            "Collector uploaded proof image",
+        )
         db.commit()
-        return {"message": "Proof uploaded successfully.", "image_url": url, "pickup_id": pickup_id}
-        
-    except Exception as e:
+    except Exception:
         db.rollback()
-        print(f"ERROR in upload_proof: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to save proof: {str(e)}")
+        delete_uploaded_path(new_path)
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to save proof. Please try again.",
+        )
+
+    if previous_path and previous_path != new_path:
+        delete_uploaded_path(previous_path)
+
+    signed_url = media_url(new_path)
+    return {
+        "message": "Proof uploaded successfully.",
+        "image_url": signed_url or new_path,
+        "pickup_id": pickup_id,
+    }
 
 # ─── State: PROOF_UPLOADED → COLLECTED ─────────────────────────────────────────
 def collect_waste(db: Session, collector: User, pickup_id: int) -> PickupRequest:

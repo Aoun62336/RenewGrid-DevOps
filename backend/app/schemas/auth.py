@@ -8,28 +8,30 @@ import re
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, EmailStr, Field, field_validator
-
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 from app.models.user import UserRole
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Register
 # ─────────────────────────────────────────────────────────────────────────────
 class RegisterRequest(BaseModel):
-    """Payload accepted by POST /auth/register."""
+    """Public registration payload. Accounts always receive the USER role."""
+    model_config = ConfigDict(extra="forbid")
 
     full_name: str = Field(
         ..., min_length=2, max_length=150, description="Full display name"
     )
-    email: EmailStr = Field(..., description="Valid e-mail address (must be unique)")
+    email: EmailStr = Field(
+        ..., description="Valid e-mail address (must be unique)"
+    )
     phone_number: Optional[str] = Field(
         None, description="10–15 digit phone number (optional)"
     )
     password: str = Field(
         ..., min_length=8, max_length=128, description="Minimum 8 characters"
     )
-    role: UserRole = Field(UserRole.USER, description="Account role")
 
     @field_validator("phone_number")
     @classmethod
@@ -44,8 +46,6 @@ class RegisterRequest(BaseModel):
     @field_validator("password")
     @classmethod
     def validate_password_strength(cls, v: str) -> str:
-        # Relaxed for user convenience: only checking for minimum length (already handled by Field)
-        # and at least one digit to maintain a baseline of complexity.
         if not re.search(r"[0-9]", v):
             raise ValueError("Password must include at least one digit.")
         return v
@@ -81,9 +81,9 @@ class UserPublic(BaseModel):
 
 
 class LoginResponse(BaseModel):
-    """Full login response with tokens + user info."""
+    """Login response — only the short-lived access JWT + user info.
+    The refresh credential travels in an HttpOnly cookie, not here."""
     access_token: str
-    refresh_token: str
     token_type: str = "bearer"
     user: UserPublic
 
@@ -91,14 +91,12 @@ class LoginResponse(BaseModel):
 # ─────────────────────────────────────────────────────────────────────────────
 #  Refresh Token
 # ─────────────────────────────────────────────────────────────────────────────
-class RefreshTokenRequest(BaseModel):
-    refresh_token: str
-
-
 class RefreshTokenResponse(BaseModel):
+    """Refresh response — new access JWT + user info.
+    The rotated refresh credential travels in an HttpOnly cookie."""
     access_token: str
-    refresh_token: str
     token_type: str = "bearer"
+    user: UserPublic
 
 
 # ─────────────────────────────────────────────────────────────────────────────

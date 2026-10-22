@@ -16,10 +16,11 @@ export default function RecyclerChangePassword() {
     e.preventDefault();
     if (form.newPass !== form.confirm) return;
     try {
-      await authAPI.changePassword({ current_password: form.current, new_password: form.newPass });
-      setSuccess(true);
-      setForm({ current: '', newPass: '', confirm: '' });
-      setTimeout(() => setSuccess(false), 4000);
+      await authAPI.changePassword({
+        old_password: form.current,
+        new_password: form.newPass,
+      });
+      // authAPI.changePassword revokes sessions and redirects to /login.
     } catch (err) {
       customAlert(err.message || 'Failed to change password');
     }

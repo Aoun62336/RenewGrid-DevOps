@@ -289,43 +289,16 @@ export function ScanQRCode() {
   const [manualCode, setManualCode] = useState('');
   const scannerRef = useRef(null);
 
-  const parsePickupId = (text) => {
-    const idMatch = text.match(/ID:\s*(\d+)/i);
-    if (idMatch) return parseInt(idMatch[1], 10);
-    const pkMatch = text.match(/PK-(\d+)/i);
-    if (pkMatch) return parseInt(pkMatch[1], 10);
-    const num = parseInt(text.trim(), 10);
-    if (!isNaN(num)) return num;
-    return null;
-  };
-
   const handleStartPickup = async (rawCode) => {
-    const pickupId = parsePickupId(rawCode);
-    if (!pickupId) {
-      setScanError(`Could not parse a pickup ID from: "${rawCode}"`);
-      return;
-    }
     setScanError('');
     try {
-      let pickup = null;
-      try { pickup = await pickupAPI.getById(pickupId); } catch {}
-      
-      if (!pickup) {
-        throw new Error(`Could not find pickup #${pickupId}`);
-      }
-
-      // Advance state machine dynamically based on current state
-      if (pickup.status === 'ASSIGNED') {
-        await collectorAPI.accept(pickupId);
-        pickup.status = 'IN_PROGRESS';
-      }
-
-      toast.success(`Verification complete for Pickup #${pickupId}`);
-      try { pickup = await pickupAPI.getById(pickupId); } catch {}
-      setScanResult(pickup || { id: pickupId });
-      setScans(prev => [{ id: pickupId, pickup, time: new Date().toLocaleTimeString() }, ...prev]);
+      // Always verify the signed handoff credential on the server.
+      const pickup = await collectorAPI.verifyQr(rawCode.trim());
+      toast.success(`Verified pickup #${pickup.id}`);
+      setScanResult(pickup);
+      setScans(prev => [{ id: pickup.id, pickup, time: new Date().toLocaleTimeString() }, ...prev]);
     } catch (err) {
-      setScanError(err.message || `Failed to verify pickup #${pickupId}`);
+      setScanError(err.message || 'Pickup handoff verification failed');
     }
   };
 
@@ -368,7 +341,7 @@ export function ScanQRCode() {
                 type="text"
                 value={manualCode}
                 onChange={(e) => setManualCode(e.target.value)}
-                placeholder="Enter pickup ID (e.g. 42)"
+                placeholder="Enter manual code (RG-...)"
                 className="flex-1 px-4 py-3 rounded-xl border border-primary-light focus:ring-2 focus:ring-primary transition-all"
               />
               <button

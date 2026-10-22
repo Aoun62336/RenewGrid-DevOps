@@ -8,19 +8,24 @@ Service methods:
   • never execute raw SQL — delegate everything to auth_repo
   • delete_account — soft-delete by setting is_active=False
 """
+import hmac
+
 from fastapi import BackgroundTasks, HTTPException, status
 from jose import JWTError
+from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from app.core.security import (
     create_access_token,
     create_refresh_token,
     decode_access_token,
-    decode_refresh_token,
+    create_password_reset_token,
+    decode_password_reset_token,
+    password_reset_fingerprint,
     hash_password,
     verify_password,
 )
-from app.models.user import User
+from app.models.user import User, UserRole
 from app.repositories.auth_repository import auth_repo
 from app.schemas.auth import (
     LoginRequest,
@@ -34,6 +39,12 @@ from app.schemas.auth import (
     ChangePasswordRequest,
 )
 from app.services.email_service import send_reset_email
+from app.services.session_service import (
+    issue_session,
+    rotate_session,
+    session_is_active,
+    revoke_all_sessions,
+)
 
 
 class AuthService:
@@ -41,10 +52,9 @@ class AuthService:
     # ── Register ──────────────────────────────────────────────────────────
     def register(self, db: Session, payload: RegisterRequest) -> RegisterResponse:
         """
-        1. Ensure the email is not already taken.
-        2. Hash the password.
-        3. Persist the new user.
-        4. Return a slim confirmation response.
+        Register a public user account.
+        Public registration is restricted to UserRole.USER.
+        Privileged accounts are provisioned through admin-only endpoints.
         """
         existing = auth_repo.get_by_email(db, email=payload.email)
         if existing:
@@ -59,7 +69,7 @@ class AuthService:
             email=payload.email,
             phone_number=payload.phone_number,
             password_hash=hash_password(payload.password),
-            role=payload.role,
+            role=UserRole.USER,
         )
 
         return RegisterResponse(
@@ -68,12 +78,17 @@ class AuthService:
         )
 
     # ── Login ─────────────────────────────────────────────────────────────
-    def login(self, db: Session, payload: LoginRequest) -> LoginResponse:
+    def login(
+        self,
+        db: Session,
+        payload: LoginRequest,
+    ) -> tuple[LoginResponse, str]:
         """
         1. Look up the user by email.
         2. Verify the password hash.
         3. Check the account is active.
-        4. Issue access + refresh tokens.
+        4. Issue a session-bound access JWT + opaque refresh credential.
+        Returns (LoginResponse, refresh_credential).
         """
         user = auth_repo.get_by_email(db, email=payload.email)
         if not user or not verify_password(payload.password, user.password_hash):
@@ -88,64 +103,74 @@ class AuthService:
                 detail="This account has been deactivated. Contact support.",
             )
 
-        return LoginResponse(
-            access_token=create_access_token(user.id),
-            refresh_token=create_refresh_token(user.id),
+        session_id, refresh_credential = issue_session(db, user.id)
+        db.commit()
+
+        result = LoginResponse(
+            access_token=create_access_token(user.id, session_id),
             user=UserPublic.model_validate(user),
         )
+        return result, refresh_credential
 
     # ── Get Current User ──────────────────────────────────────────────────
-    def get_current_user(self, db: Session, token: str) -> User:
+    def get_current_user(
+        self,
+        db: Session,
+        token: str,
+    ) -> User:
         """
-        Decode the bearer token and return the corresponding User object.
-        Raises 401 on any invalid/expired token.
+        Decode the bearer token, verify the embedded session is still active,
+        and return the corresponding User object.
+        Raises 401 on any invalid/expired/revoked token.
         """
-        credentials_exc = HTTPException(
+        unauthorized = HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Could not validate credentials.",
             headers={"WWW-Authenticate": "Bearer"},
         )
         try:
-            payload = decode_access_token(token)
-            user_id: str | None = payload.get("sub")
-            if user_id is None:
-                raise credentials_exc
-        except JWTError:
-            raise credentials_exc
+            claims = decode_access_token(token)
+            user_id = int(claims["sub"])
+            session_id = claims["sid"]
+        except (JWTError, KeyError, TypeError, ValueError):
+            raise unauthorized
 
-        user = auth_repo.get_by_id(db, user_id=int(user_id))
+        user = auth_repo.get_by_id(db, user_id=user_id)
         if user is None or not user.is_active:
-            raise credentials_exc
+            raise unauthorized
+
+        if not session_is_active(db, session_id, user.id):
+            raise unauthorized
+
         return user
 
     # ── Refresh Token ─────────────────────────────────────────────────────
     def refresh_access_token(
-        self, db: Session, refresh_token: str
-    ) -> RefreshTokenResponse:
+        self,
+        db: Session,
+        credential: str,
+    ) -> tuple[RefreshTokenResponse, str]:
         """
-        Validate the refresh token and issue a new short-lived access token.
-        The refresh token itself is NOT rotated here — add rotation if needed.
+        Rotate the opaque refresh credential and issue a new access JWT.
+        Returns (RefreshTokenResponse, new_refresh_credential).
         """
-        credentials_exc = HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired refresh token.",
-        )
-        try:
-            payload = decode_refresh_token(refresh_token)
-            user_id: str | None = payload.get("sub")
-            if user_id is None:
-                raise credentials_exc
-        except JWTError:
-            raise credentials_exc
+        session_id, user_id, replacement = rotate_session(db, credential)
 
-        user = auth_repo.get_by_id(db, user_id=int(user_id))
+        user = auth_repo.get_by_id(db, user_id=user_id)
         if user is None or not user.is_active:
-            raise credentials_exc
+            revoke_all_sessions(db, user_id)
+            db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Account unavailable.",
+            )
+        db.commit()
 
-        return RefreshTokenResponse(
-            access_token=create_access_token(user.id),
-            refresh_token=create_refresh_token(user.id)
+        result = RefreshTokenResponse(
+            access_token=create_access_token(user.id, session_id),
+            user=UserPublic.model_validate(user),
         )
+        return result, replacement
 
     # ── Password Management ───────────────────────────────────────────────
     def forgot_password(
@@ -168,7 +193,7 @@ class AuthService:
         if not user or not user.is_active:
             return _ok
 
-        reset_token = create_access_token(user.id)
+        reset_token = create_password_reset_token(user.id, user.password_hash)
 
         # Fire-and-forget: send email after response is returned.
         background_tasks.add_task(send_reset_email, to_email=user.email, reset_token=reset_token)
@@ -176,42 +201,60 @@ class AuthService:
         return _ok
 
     def reset_password(self, db: Session, payload: ResetPasswordRequest) -> dict:
+        """Consume a purpose-bound, expiring token exactly once.
+
+        Optimistic compare-and-swap prevents concurrent replay even on multiple
+        application replicas. A reset-token cannot authenticate as an access token.
         """
-        Validate the reset token and update the user's password.
-        """
+        invalid = HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired reset token.",
+        )
         try:
-            token_data = decode_access_token(payload.token)
-            user_id = token_data.get("sub")
-            if user_id is None:
-                raise JWTError("Invalid token payload")
-        except JWTError:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid or expired reset token."
-            )
-            
-        user = auth_repo.get_by_id(db, user_id=int(user_id))
+            claims = decode_password_reset_token(payload.token)
+            user_id = int(claims["sub"])
+        except (JWTError, ValueError, KeyError, TypeError):
+            raise invalid
+
+        user = auth_repo.get_by_id(db, user_id=user_id)
         if not user or not user.is_active:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid token or user."
-            )
-            
-        user.password_hash = hash_password(payload.new_password)
+            raise invalid
+        previous_hash = user.password_hash
+        if not isinstance(claims.get("pwd"), str):
+            raise invalid
+        if not hmac.compare_digest(claims["pwd"], password_reset_fingerprint(previous_hash)):
+            raise invalid
+
+        new_hash = hash_password(payload.new_password)
+        result = db.execute(
+            update(User)
+            .where(User.id == user_id, User.password_hash == previous_hash, User.is_active.is_(True))
+            .values(password_hash=new_hash)
+        )
+        if result.rowcount != 1:
+            db.rollback()
+            raise invalid
+
+        # Revoke all existing sessions so old access JWTs are rejected.
+        revoke_all_sessions(db, user_id)
         db.commit()
         return {"message": "Password has been reset successfully."}
-        
-    def change_password(self, db: Session, current_user: User, payload: ChangePasswordRequest) -> dict:
-        """
-        Change the password for the currently authenticated user.
-        """
+
+    def change_password(
+        self,
+        db: Session,
+        current_user: User,
+        payload: ChangePasswordRequest,
+    ) -> dict:
+        """Change the password for the currently authenticated user."""
         if not verify_password(payload.old_password, current_user.password_hash):
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, 
-                detail="Incorrect current password."
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Incorrect current password.",
             )
-            
+
         current_user.password_hash = hash_password(payload.new_password)
+        revoke_all_sessions(db, current_user.id)
         db.commit()
         return {"message": "Password changed successfully."}
 
@@ -220,15 +263,12 @@ class AuthService:
         """
         Soft-delete the authenticated user:
         • Set is_active = False (blocks future logins)
-        • Clear the refresh_token field if the model has one
+        • Revoke all active sessions
         """
         current_user.is_active = False
-        # Clear refresh token if the column exists on the model
-        if hasattr(current_user, 'refresh_token'):
-            current_user.refresh_token = None
+        revoke_all_sessions(db, current_user.id)
         db.commit()
         return {"message": "Account has been deactivated successfully."}
-
 
 
 # ── Module-level singleton ────────────────────────────────────────────────────

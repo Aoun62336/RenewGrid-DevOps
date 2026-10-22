@@ -2,8 +2,6 @@
 services/waste_service.py — Business logic for waste uploads.
 """
 import random
-import shutil
-import uuid
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -13,9 +11,11 @@ from sqlalchemy.orm import Session
 from app.models.user import User, UserRole
 from app.models.waste import WasteUpload, WasteCategory
 from app.repositories.waste_repository import waste_repo
-
-UPLOAD_DIR = Path("uploads/waste")
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+from app.core.upload_security import (
+    prepare_image,
+    save_prepared_image,
+    delete_uploaded_path,
+)
 
 _CATEGORY_PRICE_RATES = {
     "Laptops & Computers":      {"base": 8000.0, "per_kg": 500.0, "confidence": 0.92},
@@ -90,14 +90,6 @@ def _deterministic_ai(category: str, condition: str, weight: float, db=None) -> 
 def _mock_ai(category: str, weight: float = 1.0, condition: str = None, db=None) -> dict:
     return _deterministic_ai(category, condition, weight, db)
 
-def _save_file(file: UploadFile) -> str:
-    """Save an uploaded file to disk and return the relative URL path."""
-    ext = Path(file.filename).suffix
-    filename = f"{uuid.uuid4().hex}{ext}"
-    dest = UPLOAD_DIR / filename
-    with dest.open("wb") as out:
-        shutil.copyfileobj(file.file, out)
-    return f"/uploads/waste/{filename}"
 
 from app.services.event_service import handle_waste_uploaded
 from fastapi import BackgroundTasks
@@ -112,49 +104,57 @@ def create_waste_upload(
     description: Optional[str] = None,
     condition: Optional[str] = None,
     quantity: int = 1,
-    images: List[UploadFile] = None
+    images: List[UploadFile] = None,
 ) -> WasteUpload:
-    ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
-    MAX_SIZE = 5 * 1024 * 1024
-
     if images and len(images) > 5:
-        raise HTTPException(status_code=400, detail="Maximum 5 images allowed.")
+        raise HTTPException(
+            status_code=400,
+            detail="Maximum 5 images allowed.",
+        )
 
-    if images:
-        for file in images:
-            if file.size and file.size > MAX_SIZE:
-                raise HTTPException(status_code=413, detail=f"File {file.filename} is too large. Maximum size is 5MB.")
-            if file.content_type not in ALLOWED_IMAGE_TYPES:
-                raise HTTPException(
-                    status_code=400, 
-                    detail=f"Unsupported file type '{file.content_type}'. Allowed: {sorted(ALLOWED_IMAGE_TYPES)}"
-                )
+    # Validate every image before making database changes.
+    prepared_images = [
+        prepare_image(image)
+        for image in (images or [])
+    ]
 
-    ai = _mock_ai(category, estimated_weight, condition, db=db)
-    waste = waste_repo.create(
+    ai = _mock_ai(
+        category,
+        estimated_weight,
+        condition,
         db=db,
-        user_id=user_id,
-        title=title,
-        description=description,
-        category=category,
-        condition=condition,
-        estimated_weight=estimated_weight,
-        quantity=quantity,
-        ai_detected_type=ai["ai_detected_type"],
-        ai_confidence=ai["ai_confidence"],
-        estimated_price=ai["estimated_price"],
-        estimated_credit_points=ai["estimated_credit_points"],
-        estimated_co2_saved=ai["estimated_co2_saved"]
     )
 
-    if images:
-        for idx, f in enumerate(images):
-            if f.filename:
-                url = _save_file(f)
-                waste_repo.add_image(db, waste.id, url, (idx == 0))
+    saved_paths: List[str] = []
+    try:
+        waste = waste_repo.create(
+            db=db,
+            user_id=user_id,
+            title=title,
+            description=description,
+            category=category,
+            condition=condition,
+            estimated_weight=estimated_weight,
+            quantity=quantity,
+            ai_detected_type=ai["ai_detected_type"],
+            ai_confidence=ai["ai_confidence"],
+            estimated_price=ai["estimated_price"],
+            estimated_credit_points=ai["estimated_credit_points"],
+            estimated_co2_saved=ai["estimated_co2_saved"],
+        )
 
-    db.commit()
-    db.refresh(waste)
+        for idx, png_bytes in enumerate(prepared_images):
+            path = save_prepared_image(png_bytes, folder="waste")
+            saved_paths.append(path)
+            waste_repo.add_image(db, waste.id, path, (idx == 0))
+
+        db.commit()
+        db.refresh(waste)
+    except Exception:
+        db.rollback()
+        for path in saved_paths:
+            delete_uploaded_path(path)
+        raise
 
     # Trigger Event
     handle_waste_uploaded(background_tasks, user_id, waste.id)

@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import (
     Boolean, DateTime, Enum, Float, ForeignKey,
-    Integer, String, Text
+    Integer, String, Text, UniqueConstraint
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -171,6 +171,9 @@ class RecyclerInventory(Base):
 # ─────────────────────────────────────────────────────────────────────────────
 class Reward(Base):
     __tablename__ = "rewards"
+    __table_args__ = (
+        UniqueConstraint("pickup_id", name="uq_rewards_pickup_id"),
+    )
 
     id: Mapped[int]         = mapped_column(Integer, primary_key=True, index=True)
     user_id: Mapped[int]    = mapped_column(Integer, ForeignKey("users.id"), nullable=False)

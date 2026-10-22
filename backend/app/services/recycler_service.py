@@ -7,10 +7,11 @@ from fastapi import BackgroundTasks, HTTPException
 from sqlalchemy.orm import Session
 
 from app.models.user import User
-from app.models.core import PickupRequest, PickupStatus, ProcessingRecord, RecyclerInventory, RecyclerPayment
+from app.models.core import PickupRequest, PickupStatus, ProcessingRecord, RecyclerInventory, RecyclerPayment, Reward, Notification
 from app.schemas.recycler import ProcessStartIn, ProcessUpdateIn
 from app.repositories.recycler_repository import recycler_repo
 from app.repositories.pickup_repository import pickup_repo
+from app.services.reward_service import _calculate_reward
 
 def get_assigned_waste(db: Session, recycler: User, page: int, page_size: int) -> Tuple[int, List[PickupRequest]]:
     return recycler_repo.get_assigned_waste(db, recycler.id, page, page_size)
@@ -38,22 +39,39 @@ def start_processing(db: Session, recycler: User, pickup_id: int, body: ProcessS
     db.refresh(record)
     return record
 
-from app.services.event_service import handle_pickup_completed
-
-def update_processing(db: Session, recycler: User, pickup_id: int, body: ProcessUpdateIn, background_tasks: BackgroundTasks) -> ProcessingRecord:
+def update_processing(
+    db: Session,
+    recycler: User,
+    pickup_id: int,
+    body: ProcessUpdateIn,
+    background_tasks: BackgroundTasks,
+) -> ProcessingRecord:
     pickup = pickup_repo.get_by_id(db, pickup_id)
     if not pickup:
         raise HTTPException(status_code=404, detail="Pickup not found.")
 
     record = pickup.processing
     if not record or record.recycler_id != recycler.id:
-        raise HTTPException(status_code=404, detail="No processing record found for this recycler.")
+        raise HTTPException(
+            status_code=404,
+            detail="No processing record found for this recycler.",
+        )
+
+    if pickup.status == PickupStatus.COMPLETED:
+        raise HTTPException(
+            status_code=409,
+            detail="This pickup has already been completed.",
+        )
 
     if body.outcome not in (PickupStatus.RECYCLED, PickupStatus.COMPLETED):
-        raise HTTPException(status_code=400, detail="Outcome must be RECYCLED or COMPLETED.")
+        raise HTTPException(
+            status_code=400,
+            detail="Outcome must be RECYCLED or COMPLETED.",
+        )
 
-    # Mark as COMPLETED universally if it was RECYCLED
-    final_outcome = PickupStatus.COMPLETED if body.outcome == PickupStatus.RECYCLED else body.outcome
+    # RenewGrid convention: normalise RECYCLED → COMPLETED for unified status.
+    original_outcome_label = body.outcome.value
+    final_outcome = PickupStatus.COMPLETED
 
     record.outcome = final_outcome
     if body.decision:
@@ -63,19 +81,64 @@ def update_processing(db: Session, recycler: User, pickup_id: int, body: Process
         record.processing_notes = body.processing_notes
 
     pickup.status = final_outcome
-    pickup_repo.add_history(db, pickup.id, final_outcome, recycler.id, f"Outcome: {final_outcome}")
+    pickup_repo.add_history(
+        db, pickup.id, final_outcome, recycler.id,
+        f"Outcome: {original_outcome_label} (normalised to COMPLETED)",
+    )
 
     # Add to inventory
-    recycler_repo.add_inventory(db, recycler.id, pickup_id, pickup.final_collected_weight, final_outcome.value.lower())
+    recycler_repo.add_inventory(
+        db, recycler.id, pickup_id,
+        pickup.final_collected_weight,
+        final_outcome.value.lower(),
+    )
 
-    db.commit()
-    db.refresh(record)
+    # Calculate reward for the waste owner.
+    weight_kg = pickup.final_collected_weight or 0.0
+    points, co2_saved = _calculate_reward(weight_kg)
 
-    # ── Trigger Event ─────────────────────────────
-    if body.outcome == PickupStatus.COMPLETED:
-        handle_pickup_completed(background_tasks, pickup)
-
-    return record
+    try:
+        # Guard: only create a reward if none exists yet.
+        existing_reward = (
+            db.query(Reward)
+            .filter(Reward.pickup_id == pickup.id)
+            .first()
+        )
+        if existing_reward is None:
+            db.add(
+                Reward(
+                    user_id=pickup.user_id,
+                    pickup_id=pickup.id,
+                    points=points,
+                    co2_saved_kg=co2_saved,
+                )
+            )
+            db.add(
+                Notification(
+                    user_id=pickup.user_id,
+                    title="Reward Generated",
+                    message=(
+                        f"You earned {points} points and saved "
+                        f"{co2_saved} kg of CO\u2082 for pickup #{pickup.id}."
+                    ),
+                )
+            )
+        db.add(
+            Notification(
+                user_id=pickup.user_id,
+                title="Pickup Completed",
+                message=(
+                    f"Your pickup #{pickup.id} has been "
+                    "successfully processed."
+                ),
+            )
+        )
+        db.commit()
+        db.refresh(record)
+        return record
+    except Exception:
+        db.rollback()
+        raise
 
 def get_inventory(db: Session, recycler: User, page: int, page_size: int) -> Tuple[int, List[RecyclerInventory]]:
     return recycler_repo.get_inventory(db, recycler.id, page, page_size)

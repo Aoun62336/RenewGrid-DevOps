@@ -2,44 +2,81 @@
 routers/auth.py — Authentication + profile management.
 Includes: register, login, me, update-profile, refresh-token,
           logout, forgot-password, reset-password, change-password,
-          upload-profile-image, delete-account (NEW).
+          upload-profile-image, delete-account.
 """
-import shutil
-import uuid
-from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, UploadFile, status, Request
-from pydantic import BaseModel, EmailStr
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Request, Response, UploadFile, status
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from slowapi import Limiter
-from slowapi.util import get_remote_address
-
-limiter = Limiter(key_func=get_remote_address)
-
+from app.core.config import settings
+from app.core.limiter import limiter
 from app.core.deps import get_current_user, get_db
+from app.core.upload_security import (
+    prepare_image,
+    save_prepared_image,
+    delete_uploaded_path,
+)
 from app.models.user import User
 from app.schemas.auth import (
-    LoginRequest, LoginResponse, RefreshTokenRequest,
-    RefreshTokenResponse, RegisterRequest, RegisterResponse, UserPublic,
-    ForgotPasswordRequest, ResetPasswordRequest, ChangePasswordRequest
+    LoginRequest, LoginResponse, RefreshTokenResponse,
+    RegisterRequest, RegisterResponse, UserPublic,
+    ForgotPasswordRequest, ResetPasswordRequest, ChangePasswordRequest,
 )
 from app.services.auth_service import auth_service
+from app.services.session_service import revoke_session
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
-PROFILE_IMG_DIR = Path("uploads/profile_images")
-PROFILE_IMG_DIR.mkdir(parents=True, exist_ok=True)
+AUTH_COOKIE_NAME = "renewgrid_refresh"
 
-ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
+
+def _validate_cookie_request(request: Request) -> None:
+    """Reject cross-site browser requests to cookie-based auth routes."""
+    origin = request.headers.get("origin")
+    fetch_site = request.headers.get("sec-fetch-site")
+
+    allowed_origins = {
+        settings.FRONTEND_URL.rstrip("/"),
+        *(value.rstrip("/") for value in settings.ALLOWED_ORIGINS),
+        str(request.base_url).rstrip("/"),
+    }
+
+    if origin and origin.rstrip("/") not in allowed_origins:
+        raise HTTPException(403, "Untrusted request origin.")
+    if fetch_site == "cross-site":
+        raise HTTPException(403, "Cross-site request denied.")
+    if request.headers.get("x-requested-with") != "XMLHttpRequest":
+        raise HTTPException(403, "Missing CSRF request header.")
+
+
+def _set_refresh_cookie(response: Response, credential: str) -> None:
+    response.set_cookie(
+        key=AUTH_COOKIE_NAME,
+        value=credential,
+        httponly=True,
+        secure=settings.COOKIE_SECURE,
+        samesite="strict",
+        max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400,
+        path="/auth",
+    )
+
+
+def _clear_refresh_cookie(response: Response) -> None:
+    response.delete_cookie(
+        key=AUTH_COOKIE_NAME,
+        path="/auth",
+        httponly=True,
+        secure=settings.COOKIE_SECURE,
+        samesite="strict",
+    )
 
 
 class UpdateProfileIn(BaseModel):
     full_name: Optional[str] = None
     phone_number: Optional[str] = None
     address: Optional[str] = None
-    profile_image: Optional[str] = None
 
 
 # ─── Register ─────────────────────────────────────────────────────────────────
@@ -50,10 +87,22 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)):
 
 
 # ─── Login ────────────────────────────────────────────────────────────────────
-@router.post("/login", response_model=LoginResponse, summary="Authenticate and get tokens")
+@router.post(
+    "/login",
+    response_model=LoginResponse,
+    summary="Authenticate and create a revocable session",
+)
 @limiter.limit("5/minute")
-def login(request: Request, payload: LoginRequest, db: Session = Depends(get_db)):
-    return auth_service.login(db, payload)
+def login(
+    request: Request,
+    response: Response,
+    payload: LoginRequest,
+    db: Session = Depends(get_db),
+):
+    _validate_cookie_request(request)
+    result, credential = auth_service.login(db, payload)
+    _set_refresh_cookie(response, credential)
+    return result
 
 
 # ─── Me ───────────────────────────────────────────────────────────────────────
@@ -75,24 +124,51 @@ def update_profile(
         current_user.phone_number = payload.phone_number
     if payload.address is not None:
         current_user.address = payload.address
-    if payload.profile_image is not None:
-        current_user.profile_image = payload.profile_image
     db.commit()
     db.refresh(current_user)
     return current_user
 
 
 # ─── Refresh Token ────────────────────────────────────────────────────────────
-@router.post("/refresh-token", response_model=RefreshTokenResponse,
-             summary="Exchange refresh token for new access token")
-def refresh_token(payload: RefreshTokenRequest, db: Session = Depends(get_db)):
-    return auth_service.refresh_access_token(db, payload.refresh_token)
+@router.post(
+    "/refresh-token",
+    response_model=RefreshTokenResponse,
+    summary="Rotate the refresh credential",
+)
+@limiter.limit("20/minute")
+def refresh_token(
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+):
+    _validate_cookie_request(request)
+    credential = request.cookies.get(AUTH_COOKIE_NAME)
+    if not credential:
+        raise HTTPException(
+            status_code=401,
+            detail="Refresh session not found.",
+        )
+    result, replacement = auth_service.refresh_access_token(db, credential)
+    _set_refresh_cookie(response, replacement)
+    return result
 
 
 # ─── Logout ─────────────────────────────────────────────────────────────
-@router.post("/logout", status_code=200, summary="Logout (client-side invalidation)")
-def logout(current_user: User = Depends(get_current_user)):
-    return {"message": f"Goodbye, {current_user.full_name}! Logged out successfully."}
+@router.post(
+    "/logout",
+    status_code=200,
+    summary="Revoke the current session",
+)
+def logout(
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+):
+    _validate_cookie_request(request)
+    credential = request.cookies.get(AUTH_COOKIE_NAME)
+    revoke_session(db, credential)
+    _clear_refresh_cookie(response)
+    return {"message": "Logged out successfully."}
 
 
 # ─── Delete Account ─────────────────────────────────────────────────────
@@ -102,7 +178,6 @@ def delete_account(
     current_user: User = Depends(get_current_user),
 ):
     return auth_service.delete_account(db, current_user)
-
 
 
 # ─── Password Management ──────────────────────────────────────────────────────
@@ -126,47 +201,33 @@ def reset_password(payload: ResetPasswordRequest, db: Session = Depends(get_db))
 def change_password(
     payload: ChangePasswordRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
 ):
     return auth_service.change_password(db, current_user, payload)
 
 
-# ─── NEW: POST /auth/upload-profile-image ────────────────────────────────────
-@router.post("/upload-profile-image", response_model=UserPublic,
-             summary="Upload a profile picture (multipart/form-data)")
-async def upload_profile_image(
-    file: UploadFile = File(..., description="Profile image file (JPEG, PNG, WebP, GIF)"),
+# ─── Upload Profile Image ────────────────────────────────────────────────────
+@router.post(
+    "/upload-profile-image",
+    response_model=UserPublic,
+    summary="Upload a validated profile image",
+)
+def upload_profile_image(
+    file: UploadFile = File(...),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    # Validate content type
-    if file.content_type not in ALLOWED_IMAGE_TYPES:
-        from fastapi import HTTPException
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported file type '{file.content_type}'. Allowed: {sorted(ALLOWED_IMAGE_TYPES)}"
-        )
-
-    # Validate file size (max 5MB)
-    MAX_SIZE = 5 * 1024 * 1024
-    content = await file.read()
-    if len(content) > MAX_SIZE:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=413, detail="File too large. Maximum size is 5MB.")
-    
-    # Reset file pointer after reading
-    await file.seek(0)
-
-    ext = Path(file.filename).suffix or ".jpg"
-    filename = f"user_{current_user.id}_{uuid.uuid4().hex}{ext}"
-    dest = PROFILE_IMG_DIR / filename
-
-    with dest.open("wb") as out:
-        shutil.copyfileobj(file.file, out)
-
-    image_url = f"/uploads/profile_images/{filename}"
-    current_user.profile_image = image_url
-    db.commit()
-    db.refresh(current_user)
-
+    prepared = prepare_image(file)
+    previous_path = current_user.profile_image
+    new_path = save_prepared_image(prepared, folder="profile_images")
+    try:
+        current_user.profile_image = new_path
+        db.commit()
+        db.refresh(current_user)
+    except Exception:
+        db.rollback()
+        delete_uploaded_path(new_path)
+        raise
+    if previous_path and previous_path != new_path:
+        delete_uploaded_path(previous_path)
     return current_user

@@ -41,10 +41,15 @@ class Settings(BaseSettings):
             return [origin.strip() for origin in v.split(",") if origin.strip()]
         return v  # already a list (e.g. when set programmatically in tests)
 
+    # ── Session Cookie ────────────────────────────────────────────────────────
+    # Local HTTP development only. Require True behind production HTTPS.
+    COOKIE_SECURE: bool = False
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
         extra = "allow"         # ignore unknown keys in .env
+
 
 
 # Singleton instance imported across the app

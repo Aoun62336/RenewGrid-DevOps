@@ -34,7 +34,7 @@ from app.core.config import settings          # noqa: E402
 # ── Import Base + ALL models so autogenerate can see every table ──────────────
 from app.db.database import Base             # noqa: E402, F401
 
-from app.models.user import User             # noqa: E402, F401
+from app.models.user import User, AuthSession             # noqa: E402, F401
 from app.models.waste import WasteUpload, WasteImage  # noqa: E402, F401
 from app.models.core import (                # noqa: E402, F401
     PickupRequest,

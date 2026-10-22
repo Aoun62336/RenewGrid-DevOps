@@ -5,23 +5,39 @@ State machine: ASSIGNED → ACCEPTED → IN_ROUTE → IN_PROGRESS → COLLECTED 
 """
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, File, Form, Query, UploadFile, Request
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_db, require_role
+from app.core.limiter import limiter
 from app.models.user import User, UserRole
 from app.schemas.pickup import PickupResponse, WeightUpdateIn
-from app.services import collector_service
+from app.services import collector_service, pickup_service
 
 router = APIRouter()
 
 # ─── Schemas ─────────────────────────────────────────────────────────────────
+class VerifyQRIn(BaseModel):
+    code: str = Field(min_length=8, max_length=2048)
+
+
 class AvailabilityIn(BaseModel):
     is_available: bool
 
 class RejectIn(BaseModel):
     reason: Optional[str] = None
+
+# ─── POST /collector/verify-qr ─────────────────────────────────────────────────
+@router.post("/verify-qr", response_model=PickupResponse, summary="Verify assigned pickup handoff")
+@limiter.limit("6/minute")
+def verify_pickup_qr(
+    request: Request,
+    body: VerifyQRIn,
+    db: Session = Depends(get_db),
+    collector: User = Depends(require_role(UserRole.COLLECTOR)),
+):
+    return pickup_service.verify_qr(db, collector, body.code)
 
 # ─── GET /collector/pickups ───────────────────────────────────────────────────
 @router.get("/pickups", response_model=dict, summary="My assigned pickups")
